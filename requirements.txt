@@ -1,0 +1,30 @@
+# ── Web framework ──────────────────────────────────────────────────────────────
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+python-multipart>=0.0.9          # FastAPI dosya yükleme desteği
+
+# ── LLM istemcisi (LM Studio OpenAI-uyumlu endpoint) ──────────────────────────
+openai>=1.54.0
+
+# ── Vektör veritabanı ──────────────────────────────────────────────────────────
+qdrant-client[fastembed]>=1.12.0 # fastembed: sparse/BM25 vektörler dahil
+
+# ── Embedding & reranking ──────────────────────────────────────────────────────
+sentence-transformers>=3.3.0     # e5-large embedding + cross-encoder reranking
+
+# ── PDF ayrıştırma ─────────────────────────────────────────────────────────────
+pdfplumber>=0.11.0               # tablo ve sütun yapısını korur
+Pillow>=10.0.0                   # pdfplumber bağımlılığı
+
+# ── HTML ayrıştırma (mevzuat.gov.tr) ──────────────────────────────────────────
+beautifulsoup4>=4.12.0
+lxml>=5.3.0                      # bs4 için hızlı HTML parser
+requests>=2.32.0
+
+# ── Konfigürasyon ──────────────────────────────────────────────────────────────
+python-dotenv>=1.0.0             # .env dosyasından ayarları yükler
+
+# ── Yardımcı ───────────────────────────────────────────────────────────────────
+numpy>=1.26.0
+tqdm>=4.66.0
+httpx>=0.27.0
