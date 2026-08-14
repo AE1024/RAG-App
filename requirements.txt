@@ -1,28 +1,35 @@
 # ── Web framework ──────────────────────────────────────────────────────────────
 fastapi>=0.115.0
 uvicorn[standard]>=0.32.0
-python-multipart>=0.0.9          # FastAPI dosya yükleme desteği
+python-multipart>=0.0.9
 
-# ── LLM istemcisi (LM Studio OpenAI-uyumlu endpoint) ──────────────────────────
+# ── LLM istemcisi ──────────────────────────────────────────────────────────────
 openai>=1.54.0
 
-# ── Vektör veritabanı ──────────────────────────────────────────────────────────
-qdrant-client[fastembed]>=1.12.0 # fastembed: sparse/BM25 vektörler dahil
+# ── LangChain ──────────────────────────────────────────────────────────────────
+langchain>=0.3.0
+langchain-community>=0.3.0
+langchain-huggingface>=0.1.0
+langchain-chroma>=0.1.0
+langchain-openai>=0.2.0          # ChatOpenAI → MultiQueryRetriever için LM Studio wrapper
+langchain-text-splitters>=0.3.0  # MarkdownHeaderTextSplitter, RecursiveCharacterTextSplitter
 
-# ── Embedding & reranking ──────────────────────────────────────────────────────
-sentence-transformers>=3.3.0     # e5-large embedding + cross-encoder reranking
+# ── Vektör veritabanı (local, Docker gerekmez) ─────────────────────────────────
+chromadb>=0.5.0
+
+# ── Embedding ──────────────────────────────────────────────────────────────────
+sentence-transformers>=3.3.0    # multilingual-e5-small (120MB, hızlı)
 
 # ── PDF ayrıştırma ─────────────────────────────────────────────────────────────
-pdfplumber>=0.11.0               # tablo ve sütun yapısını korur
-Pillow>=10.0.0                   # pdfplumber bağımlılığı
+pymupdf4llm>=0.0.17             # PDF → Markdown, yapıyı korur
+pymupdf>=1.24.0                 # pymupdf4llm bağımlılığı
 
 # ── HTML ayrıştırma (mevzuat.gov.tr) ──────────────────────────────────────────
-beautifulsoup4>=4.12.0
-lxml>=5.3.0                      # bs4 için hızlı HTML parser
+lxml>=5.3.0
 requests>=2.32.0
 
 # ── Konfigürasyon ──────────────────────────────────────────────────────────────
-python-dotenv>=1.0.0             # .env dosyasından ayarları yükler
+python-dotenv>=1.0.0
 
 # ── Yardımcı ───────────────────────────────────────────────────────────────────
 numpy>=1.26.0

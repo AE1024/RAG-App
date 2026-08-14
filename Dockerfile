@@ -2,15 +2,17 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# pdfplumber ve sentence-transformers için derleme araçları
+# ChromaDB (sqlite3) + pymupdf4llm + sentence-transformers derleme gereksinimleri
 RUN apt-get update && apt-get install -y --no-install-recommends \
         gcc \
         g++ \
         libglib2.0-0 \
+        libsqlite3-dev \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
-# Önce CPU-only torch (CUDA olmadan ~200MB, CUDA ile ~2.5GB fark var)
+
+# CPU-only torch (~200MB) — CUDA olmayan ortamlar için
 RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
 RUN pip install --no-cache-dir -r requirements.txt
 
@@ -18,4 +20,6 @@ COPY . .
 
 EXPOSE 8000
 
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+# Not: PDF ingestion (RAG/ingest.py) container dışında veya ayrı bir job olarak çalıştırılmalı.
+# PDF_DIR ortam değişkeniyle klasör yolu override edilebilir.
+CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000"]
