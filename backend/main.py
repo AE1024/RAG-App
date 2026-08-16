@@ -8,6 +8,8 @@ from pydantic import BaseModel
 from openai import OpenAI
 from dotenv import load_dotenv
 
+from guardrails.forward_guards import ForwardGuardPipeline
+
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from RAG.retrieval import Retriever
 
@@ -45,19 +47,19 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
+ 
 llm_client = OpenAI(base_url=LM_STUDIO_URL, api_key="lm-studio")
 retriever  = Retriever()
-
+forward_guard_pipeline = ForwardGuardPipeline()
 
 class ChatRequest(BaseModel):
     message:    str
     session_id: str = "default"
 
 class Source(BaseModel):
-    kanun_adi: str
-    madde:     str
-    kaynak:    str
+    law_name: str
+    law:     str
+    source:    str
 
 class ChatResponse(BaseModel):
     response: str
@@ -93,9 +95,9 @@ def build_context(results: list) -> tuple[str, list[Source]]:
             txt = txt[:MAX_PARENT_CHARS] + "\n[...]"
         parts.append(f"[{kanun_label} — {m.get('madde', '')}]\n{txt}")
         sources.append(Source(
-            kanun_adi=kanun_label,
-            madde=m.get('madde', ''),
-            kaynak=m.get('kaynak', ''),
+            law_name=kanun_label,
+            law=m.get('kanun_tam') or m.get('kanun_adi', ''),
+            source=m.get('kaynak', ''),
         ))
 
     return "\n\n".join(parts), sources
@@ -110,7 +112,7 @@ def filter_grounded_sources(reply: str, sources: list[Source]) -> list[Source]:
     mentioned = set(re.findall(r'(?:[Mm]adde\s*|m\.\s*)(\d+)', reply))
     grounded  = [
         src for src in sources
-        if (m := re.search(r'(\d+)', src.madde)) and m.group(1) in mentioned
+        if (m := re.search(r'(\d+)', src.law)) and m.group(1) in mentioned
     ]
     return grounded if grounded else sources
 
@@ -118,8 +120,20 @@ def filter_grounded_sources(reply: str, sources: list[Source]) -> list[Source]:
 @app.post("/chat", response_model=ChatResponse)
 def chat(request: ChatRequest):
     try:
+        # Aşama 1 — retriever'dan önce: LengthGuard + PIIGuard
+        pre_results = forward_guard_pipeline.pre_retrieval(request.message)
+        blocked = next((r for r in pre_results if not r.passed and r.severity == "block"), None)
+        if blocked:
+            raise HTTPException(status_code=400, detail=blocked.reason)
+
+        # Retrieval
         results = retriever.search(request.message, top_k=RETRIEVAL_TOP_K)
         context, sources = build_context(results)
+
+        # Aşama 2 — LLM'den önce: RetrievalEmptyGuard + IndirectInjectionSanitizer
+        empty_guard, context = forward_guard_pipeline.pre_llm(results, context)
+        if not empty_guard.passed:
+            return ChatResponse(response=str(empty_guard.reason), sources=[])
 
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
@@ -130,15 +144,23 @@ def chat(request: ChatRequest):
             messages=messages,
             temperature=0.4,
         )
-        msg       = response.choices[0].message
+        msg= response.choices[0].message
         raw_reply = msg.content or getattr(msg, "reasoning_content", None) or ""
-        reply     = clean_reply(raw_reply)
+        reply= clean_reply(raw_reply)
+
+        # Aşama 3 — LLM'den sonra: NumericalHallucinationGuard
+        post_results = forward_guard_pipeline.post_llm(reply, context)
+        warn = next((r for r in post_results if not r.passed and r.severity == "warn"), None)
+        if warn:
+            reply = reply + f"\n\n {warn.reason}"
 
         return ChatResponse(
             response=reply,
             sources=filter_grounded_sources(reply, sources),
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -147,7 +169,7 @@ def chat(request: ChatRequest):
 def grounding_check(req: dict):
     question = req.get("question", "")
     response = req.get("response", "")
-    context_str, all_sources = build_context(retriever.search(question, top_k=4))
+    _, all_sources = build_context(retriever.search(question, top_k=4))
     grounded = filter_grounded_sources(response, all_sources)
     unused   = [s for s in all_sources if s not in grounded]
     return {
