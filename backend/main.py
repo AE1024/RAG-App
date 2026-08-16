@@ -9,6 +9,7 @@ from openai import OpenAI
 from dotenv import load_dotenv
 
 from backend.guardrails.forward_guards import ForwardGuardPipeline
+from backend.logger import RequestLogger
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from RAG.retrieval import Retriever
@@ -119,20 +120,30 @@ def filter_grounded_sources(reply: str, sources: list[Source]) -> list[Source]:
 
 @app.post("/chat", response_model=ChatResponse)
 def chat(request: ChatRequest):
+    rl = RequestLogger(request.message, request.session_id)
+
     try:
         # Aşama 1 — retriever'dan önce: LengthGuard + PIIGuard
         pre_results = forward_guard_pipeline.pre_retrieval(request.message)
-        blocked = next((r for r in pre_results if not r.passed and r.severity == "block"), None)
+        blocked  = next((r for r in pre_results if not r.passed and r.severity == "block"), None)
+        pii_warn = next((r for r in pre_results if r.passed and r.severity == "warn"), None)
+        if pii_warn:
+            rl.set(guard_pre="warn:pii")
         if blocked:
+            rl.set(guard_pre=f"block:{blocked.reason[:60]}", early_exit="length_block")
+            rl.flush()
             raise HTTPException(status_code=400, detail=blocked.reason)
 
         # Retrieval
         results = retriever.search(request.message, top_k=RETRIEVAL_TOP_K)
         context, sources = build_context(results)
+        rl.set(retrieval_count=len(results))
 
         # Aşama 2 — LLM'den önce: RetrievalEmptyGuard + IndirectInjectionSanitizer
         empty_guard, context = forward_guard_pipeline.pre_llm(results, context)
         if not empty_guard.passed:
+            rl.set(guard_empty="block", early_exit="empty_retrieval")
+            rl.flush()
             return ChatResponse(response=str(empty_guard.reason), sources=[])
 
         messages = [
@@ -144,24 +155,34 @@ def chat(request: ChatRequest):
             messages=messages,
             temperature=0.4,
         )
-        msg= response.choices[0].message
+        msg       = response.choices[0].message
         raw_reply = msg.content or getattr(msg, "reasoning_content", None) or ""
-        reply= clean_reply(raw_reply)
+        reply     = clean_reply(raw_reply)
+
+        if response.usage:
+            rl.set(
+                tokens_prompt=response.usage.prompt_tokens,
+                tokens_completion=response.usage.completion_tokens,
+            )
 
         # Aşama 3 — LLM'den sonra: NumericalHallucinationGuard
         post_results = forward_guard_pipeline.post_llm(reply, context)
         warn = next((r for r in post_results if not r.passed and r.severity == "warn"), None)
         if warn:
-            reply = reply + f"\n\n {warn.reason}"
+            rl.set(guard_post="warn:sayısal")
+            reply = reply + f"\n\n⚠️ {warn.reason}"
 
-        return ChatResponse(
-            response=reply,
-            sources=filter_grounded_sources(reply, sources),
-        )
+        final_sources = filter_grounded_sources(reply, sources)
+        rl.set(sources_count=len(final_sources))
+        rl.flush()
+
+        return ChatResponse(response=reply, sources=final_sources)
 
     except HTTPException:
         raise
     except Exception as e:
+        rl.set(early_exit=f"error:{type(e).__name__}")
+        rl.flush()
         raise HTTPException(status_code=500, detail=str(e))
 
 
