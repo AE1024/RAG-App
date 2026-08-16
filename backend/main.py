@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from openai import OpenAI
 from dotenv import load_dotenv
 
-from guardrails.forward_guards import ForwardGuardPipeline
+from backend.guardrails.forward_guards import ForwardGuardPipeline
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from RAG.retrieval import Retriever
