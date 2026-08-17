@@ -17,6 +17,7 @@ from langchain_chroma import Chroma
 from langchain_core.documents import Document
 
 from RAG.embedding import E5SmallEmbeddings
+from backend.tracing import traceable
 
 CHROMA_DIR   = str(Path(__file__).resolve().parent.parent / "chroma_db")
 PARENTS_FILE = Path(__file__).resolve().parent.parent / "chroma_db" / "parents.json"
@@ -61,6 +62,7 @@ class Retriever:
                 "Lütfen çalıştırın: python -m RAG.data_ingestion.ingest --reset"
             )
 
+    @traceable(name="retrieval", run_type="retriever")
     def search(self, query: str, top_k: int = 4) -> list[Document]:
         normalized = _normalize_query(query)
 

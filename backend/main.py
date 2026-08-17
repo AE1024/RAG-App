@@ -12,6 +12,7 @@ from backend.guardrails.forward_guards import ForwardGuardPipeline
 from backend.guardrails.input_guards import input_guardrail
 from backend.guardrails.output_guards import output_guardrail
 from backend.logger import RequestLogger
+from backend.tracing import traceable, wrap_openai
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from RAG.retrieval import Retriever
@@ -51,7 +52,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
  
-llm_client = OpenAI(base_url=LM_STUDIO_URL, api_key="lm-studio")
+llm_client = wrap_openai(OpenAI(base_url=LM_STUDIO_URL, api_key="lm-studio"))
 retriever  = Retriever()
 forward_guard_pipeline = ForwardGuardPipeline()
 
@@ -120,13 +121,14 @@ def filter_grounded_sources(reply: str, sources: list[Source]) -> list[Source]:
     return grounded if grounded else sources
 
 
-@app.post("/chat", response_model=ChatResponse)
-async def chat(request: ChatRequest):
-    rl = RequestLogger(request.message, request.session_id)
+@traceable(name="chat_pipeline")
+async def _run_chat(message: str, session_id: str) -> ChatResponse:
+    """Tüm RAG pipeline'ı — LangSmith bu fonksiyonu izler."""
+    rl = RequestLogger(message, session_id)
 
     try:
         # Aşama 1 — retriever'dan önce: LengthGuard + PIIGuard  [Layer 1]
-        pre_results = forward_guard_pipeline.pre_retrieval(request.message)
+        pre_results = forward_guard_pipeline.pre_retrieval(message)
         blocked  = next((r for r in pre_results if not r.passed and r.severity == "block"), None)
         pii_warn = next((r for r in pre_results if r.passed and r.severity == "warn"), None)
         if pii_warn:
@@ -137,7 +139,7 @@ async def chat(request: ChatRequest):
             raise HTTPException(status_code=400, detail=blocked.reason)
 
         # Aşama 2 — Groq konu sınıflandırması  [Layer 2]
-        topic = await input_guardrail(request.message)
+        topic = await input_guardrail(message)
         if topic.strip() == "not_allowed":
             rl.set(guard_topic="block", early_exit="topic_block")
             rl.flush()
@@ -148,7 +150,7 @@ async def chat(request: ChatRequest):
         rl.set(guard_topic="pass")
 
         # Retrieval
-        results = retriever.search(request.message, top_k=RETRIEVAL_TOP_K)
+        results = retriever.search(message, top_k=RETRIEVAL_TOP_K)
         context, sources = build_context(results)
         rl.set(retrieval_count=len(results))
 
@@ -161,16 +163,16 @@ async def chat(request: ChatRequest):
 
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user",   "content": f"BAĞLAM:\n{context}\n\nSORU: {request.message}"},
+            {"role": "user",   "content": f"BAĞLAM:\n{context}\n\nSORU: {message}"},
         ]
         response = llm_client.chat.completions.create(
             model=LM_STUDIO_MODEL,
             messages=messages,
             temperature=0.4,
         )
-        msg= response.choices[0].message
+        msg = response.choices[0].message
         raw_reply = msg.content or getattr(msg, "reasoning_content", None) or ""
-        reply= clean_reply(raw_reply)
+        reply = clean_reply(raw_reply)
 
         if response.usage:
             rl.set(
@@ -199,7 +201,12 @@ async def chat(request: ChatRequest):
     except Exception as e:
         rl.set(early_exit=f"error:{type(e).__name__}")
         rl.flush()
-        raise HTTPException(status_code=500, detail=str(e))
+        raise
+
+
+@app.post("/chat", response_model=ChatResponse)
+async def chat(request: ChatRequest):
+    return await _run_chat(request.message, request.session_id)
 
 
 @app.post("/debug/grounding")
