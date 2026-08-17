@@ -50,7 +50,6 @@ _TC_KIMLIK_RE = re.compile(r'\b[1-9]\d{10}\b')
 _PHONE_RE     = re.compile(r'(\+90|0)[\s\-]?5\d{2}[\s\-]?\d{3}[\s\-]?\d{2}[\s\-]?\d{2}')
 _IBAN_RE      = re.compile(r'\bTR\d{24}\b', re.IGNORECASE)
 
-_NUMBER_RE = re.compile(r'\b\d{2,}[\d.,]*\b')  # 2+ hane: tek hane false positive verir
 
 _INJECTION_PATTERNS: tuple[re.Pattern, ...] = (
     re.compile(r'ignore\s+(?:\w+\s+){0,2}instructions?', re.IGNORECASE),   # "ignore [1-3 kelime] instructions"
@@ -162,25 +161,6 @@ class IndirectInjectionSanitizer:
 # Output Guard'ları
 # ---------------------------------------------------------------------------
 
-class NumericalHallucinationGuard(OutputGuard):
-    """
-    Yanıttaki 2+ haneli sayıların retrieved context'te bulunup bulunmadığını
-    regex ile kontrol eder. moderation_guardrail()'i tamamlar, daha hızlıdır.
-    """
-
-    def check(self, reply: str, context: str) -> GuardResult:
-        numbers = list(dict.fromkeys(_NUMBER_RE.findall(reply)))  # sıralı tekilleştirme
-        ungrounded = [n for n in numbers if n not in context]
-        if ungrounded:
-            return GuardResult(
-                passed=False,
-                reason=f"Yanıtta bağlamda doğrulanamayan sayısal değer var: {', '.join(ungrounded[:3])}",
-                severity="warn",
-            )
-        return GuardResult(passed=True)
-
-
-
 # ---------------------------------------------------------------------------
 # Pipeline'lar
 # ---------------------------------------------------------------------------
@@ -205,18 +185,10 @@ class FastInputPipeline:
 
 
 class FastOutputPipeline:
-    """
-    LLM yanıtı üretildikten sonra, Groq guard'larından önce çalışır.
-    Tüm guard'lar çalışır; sonuçlar toplanır.
-    """
-
-    def __init__(self) -> None:
-        self._guards: list[OutputGuard] = [
-            NumericalHallucinationGuard(),
-        ]
+    """LLM yanıtı üretildikten sonra çalışır. Şu an aktif guard yok."""
 
     def run(self, reply: str, context: str) -> list[GuardResult]:
-        return [guard.check(reply, context) for guard in self._guards]
+        return []
 
 # Process all guard pipelines
 class ForwardGuardPipeline:

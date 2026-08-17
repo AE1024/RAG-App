@@ -1,15 +1,6 @@
-import asyncio
-
 from backend.guardrails.groq_client import Client_Groq
-from backend.guardrails.input_guards import execute_chat_with_guardrail
 
 groq_client = Client_Groq()
-
-_BLOCKED_MSG = "Bu sistem yalnızca Türk hukuku ve mevzuatıyla ilgili sorulara yanıt vermektedir."
-_HALLUCINATION_MSG = (
-    " Bu yanıt, mevcut kanun metinlerinde doğrulanamayan bilgiler içerebilir. "
-    "Lütfen bir hukuk uzmanına danışın."
-)
 
 _GROUNDING_SYSTEM = (
     "Sen bir hukuki RAG sisteminin çıktısını denetleyen bir kontrol asistanısın.\n\n"
@@ -27,9 +18,10 @@ _GROUNDING_SYSTEM = (
 )
 
 
-async def moderation_guardrail(context: str, chat_response: str) -> str:
-    """Yanıtı bağlamla karşılaştırıp 1-5 arası halüsinasyon skoru döner."""
-    print("Grounding guardrail kontrol ediliyor...")
+async def output_guardrail(context: str, chat_response: str) -> str:
+    """Yanıtı bağlamla karşılaştırıp 1-5 arası halüsinasyon skoru döner.
+    1-2: iyi, 3: orta, 4-5: uyarı eşiği (main.py'de >= 4 kullanıcıya uyarı eklenir).
+    """
     messages = [
         {"role": "system", "content": _GROUNDING_SYSTEM},
         {
@@ -40,55 +32,21 @@ async def moderation_guardrail(context: str, chat_response: str) -> str:
             ),
         },
     ]
-    score_str = await groq_client.get_chat_response_async(messages, temperature=0)
-    print(f"Grounding skoru: {score_str!r}")
-    return str(score_str)
-
-
-async def execute_all_guardrails(user_request: str, context: str = "") -> str:
-    """
-    Tam guardrail pipeline:
-      1. execute_chat_with_guardrail → konu dışıysa erken çık
-      2. moderation_guardrail        → halüsinasyon skoru yüksekse uyar
-    """
-    # Adım 1: Konu kontrolü + chat (execute_chat_with_guardrail içinde input_guardrail var)
-    chat_response = await execute_chat_with_guardrail(user_request)
-
-    if chat_response == _BLOCKED_MSG:
-        return chat_response
-
-    # Adım 2: Grounding kontrolü
-    score_str = await moderation_guardrail(context, str(chat_response))
-
-    try:
-        score = int(score_str.strip())
-    except ValueError:
-        print(f"Geçersiz skor formatı: {score_str!r}, yanıt olduğu gibi döndürülüyor.")
-        return str(chat_response)
-
-    if score >= 3:
-        print(f"Grounding guardrail devreye girdi, skor: {score}")
-        return _HALLUCINATION_MSG
-
-    print(f"Grounding geçildi, skor: {score}")
-    return str(chat_response)
+    result = await groq_client.get_chat_response_async(messages, temperature=0)
+    result = str(result).strip()
+    return result.splitlines()[0]  
 
 
 if __name__ == "__main__":
+    import asyncio
+
     async def _test():
-        test_context = (
+        context = (
             "[İş Kanunu (4857) — Madde 17]\n"
-            "Belirsiz süreli iş sözleşmelerinin feshinden önce durumun diğer "
-            "tarafa bildirilmesi gerekir. İş sözleşmeleri; işi altı aydan az "
-            "sürmüş işçi için iki hafta sonra feshedilmiş sayılır."
+            "İş sözleşmeleri; işi altı aydan az sürmüş işçi için iki hafta "
+            "sonra feshedilmiş sayılır."
         )
-        good = "İş sözleşmesinde ihbar süresi ne kadardır?"
-        bad = "Bugün İstanbul'da hava nasıl?"
-
-        print("--- Alakasız soru (konu guardrail bekleniyor) ---")
-        print(await execute_all_guardrails(bad, context=""))
-
-        print("\n--- Hukuki soru (grounding kontrol bekleniyor) ---")
-        print(await execute_all_guardrails(good, context=test_context))
+        reply = "İş Kanunu Madde 17'ye göre ihbar süresi iki haftadır."
+        print("Grounding skoru:", await output_guardrail(context, reply))
 
     asyncio.run(_test())

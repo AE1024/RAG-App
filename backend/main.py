@@ -9,6 +9,8 @@ from openai import OpenAI
 from dotenv import load_dotenv
 
 from backend.guardrails.forward_guards import ForwardGuardPipeline
+from backend.guardrails.input_guards import input_guardrail
+from backend.guardrails.output_guards import output_guardrail
 from backend.logger import RequestLogger
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -26,7 +28,7 @@ Görevin, kullanıcıların Türk kanunları ve yönetmelikleri hakkındaki soru
 KURALLAR:
 - Yalnızca sana verilen BAĞLAM bölümündeki kanun metinlerini kullanarak cevap ver.
 - Bağlamda bulunmayan bilgileri kesinlikle uydurma veya tahmin etme.
-- KRİTİK: Süre, yıl, gün, para miktarı gibi sayısal değerleri ASLA bağlamdan bağımsız yazma. Bağlamda "10 yıl" yazmıyorsa "10 yıl" deme. Bağlamda süre yoksa "Elimdeki bağlamda bu konunun süre bilgisi yer almamaktadır." de.
+- Sayısal değerleri (süre, para, yıl) yalnızca bağlamdan alarak yaz. Bağlamda kesin rakam yoksa ama bir formül ya da aralık varsa bunu açıkla ("katsayıya bağlı olarak değişir" vb.); hiç yoksa "bağlamda bu değer yer almıyor" de.
 - Her atıf için kanunun TAM ADINI ve madde numarasını belirt (örn: "Türk Borçlar Kanunu Madde 146").
 - TEMEL UYARI — Terim Tutarlılığı: Her kanunda "Bakanlık" farklı bir bakanlığı ifade edebilir.
   Askerlik/savunma kanunlarında "Bakanlık" = Milli Savunma Bakanlığı'dır.
@@ -119,11 +121,11 @@ def filter_grounded_sources(reply: str, sources: list[Source]) -> list[Source]:
 
 
 @app.post("/chat", response_model=ChatResponse)
-def chat(request: ChatRequest):
+async def chat(request: ChatRequest):
     rl = RequestLogger(request.message, request.session_id)
 
     try:
-        # Aşama 1 — retriever'dan önce: LengthGuard + PIIGuard
+        # Aşama 1 — retriever'dan önce: LengthGuard + PIIGuard  [Layer 1]
         pre_results = forward_guard_pipeline.pre_retrieval(request.message)
         blocked  = next((r for r in pre_results if not r.passed and r.severity == "block"), None)
         pii_warn = next((r for r in pre_results if r.passed and r.severity == "warn"), None)
@@ -134,12 +136,23 @@ def chat(request: ChatRequest):
             rl.flush()
             raise HTTPException(status_code=400, detail=blocked.reason)
 
+        # Aşama 2 — Groq konu sınıflandırması  [Layer 2]
+        topic = await input_guardrail(request.message)
+        if topic.strip() == "not_allowed":
+            rl.set(guard_topic="block", early_exit="topic_block")
+            rl.flush()
+            raise HTTPException(
+                status_code=400,
+                detail="Bu sistem yalnızca Türk hukuku ve mevzuatıyla ilgili sorulara yanıt vermektedir.",
+            )
+        rl.set(guard_topic="pass")
+
         # Retrieval
         results = retriever.search(request.message, top_k=RETRIEVAL_TOP_K)
         context, sources = build_context(results)
         rl.set(retrieval_count=len(results))
 
-        # Aşama 2 — LLM'den önce: RetrievalEmptyGuard + IndirectInjectionSanitizer
+        # Aşama 3 — LLM'den önce: RetrievalEmptyGuard + IndirectInjectionSanitizer  [Layer 1]
         empty_guard, context = forward_guard_pipeline.pre_llm(results, context)
         if not empty_guard.passed:
             rl.set(guard_empty="block", early_exit="empty_retrieval")
@@ -155,9 +168,9 @@ def chat(request: ChatRequest):
             messages=messages,
             temperature=0.4,
         )
-        msg       = response.choices[0].message
+        msg= response.choices[0].message
         raw_reply = msg.content or getattr(msg, "reasoning_content", None) or ""
-        reply     = clean_reply(raw_reply)
+        reply= clean_reply(raw_reply)
 
         if response.usage:
             rl.set(
@@ -165,12 +178,15 @@ def chat(request: ChatRequest):
                 tokens_completion=response.usage.completion_tokens,
             )
 
-        # Aşama 3 — LLM'den sonra: NumericalHallucinationGuard
-        post_results = forward_guard_pipeline.post_llm(reply, context)
-        warn = next((r for r in post_results if not r.passed and r.severity == "warn"), None)
-        if warn:
-            rl.set(guard_post="warn:sayısal")
-            reply = reply + f"\n\n⚠️ {warn.reason}"
+        # Aşama 4 — Groq grounding skoru  [Layer 2]
+        score_str = await output_guardrail(context, reply)
+        try:
+            score = int(score_str.strip())
+        except ValueError:
+            score = None
+        rl.set(groq_grounding=score)
+        if score and score >= 4:
+            reply += "\n\n Bu yanıt kanun metinleriyle tam örtüşmeyebilir. Bir hukuk uzmanına danışın."
 
         final_sources = filter_grounded_sources(reply, sources)
         rl.set(sources_count=len(final_sources))

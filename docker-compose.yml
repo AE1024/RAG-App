@@ -8,7 +8,7 @@ services:
       - .env
     volumes:
       - .:/app
-      - chroma_data:/app/chroma_db   # ChromaDB lokal dosyaları kalıcı sakla
+      - chroma_data:/app/chroma_db   
     restart: unless-stopped
 
 volumes:
