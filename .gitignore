@@ -4,3 +4,5 @@ chroma_db/
 .venv/
 *.pyc
 logs/
+.pytest_cache
+.deepeval

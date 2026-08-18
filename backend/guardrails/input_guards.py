@@ -27,7 +27,8 @@ async def input_guardrail(user_request: str) -> str:
         {"role": "system", "content": _TOPIC_SYSTEM},
         {"role": "user",   "content": user_request},
     ]
-    return await groq_client.get_chat_response_async(messages, temperature=0)
+    resp = await groq_client.get_chat_response_async(messages, temperature=0)
+    return resp.strip().splitlines()[0]  
 
 
 if __name__ == "__main__":
