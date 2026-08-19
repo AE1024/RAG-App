@@ -62,15 +62,15 @@ class ChatRequest(BaseModel):
 
 class Source(BaseModel):
     law_name: str
-    law:     str
-    source:    str
+    law:str
+    source:str
 
 class ChatResponse(BaseModel):
     response: str
     sources:  list[Source]
 
 
-_THINK_RE    = re.compile(r'<think>.*?</think>', re.DOTALL | re.IGNORECASE)
+_THINK_RE= re.compile(r'<think>.*?</think>', re.DOTALL | re.IGNORECASE)
 _ARTIFACT_RE = re.compile(r'^\s*\[\s*\]\s*:\s*', re.MULTILINE)
 
 def clean_reply(text: str) -> str:
