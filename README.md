@@ -1,4 +1,4 @@
-# Türk Hukuku RAG Chatbot
+# Türkiye Cumhuriyeti Kanunları RAG Chatbot
 
 Türk kanun metinlerini (PDF) işleyip hukuki sorulara **tamamen yerel** cevap veren bir Retrieval-Augmented Generation sistemi. İnternet bağlantısı gerektirmez, veriler dışarı çıkmaz.
 
